@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, symbol_short,
+    contract, contracterror, contractevent, contractimpl, contracttype,
     token, Address, BytesN, Env, Map, String, Symbol, Vec,
 };
 
@@ -302,6 +302,7 @@ fn mark_processed(env: &Env, proof: &BytesN<32>) -> Result<(), Error> {
 mod test {
     use super::*;
     use soroban_sdk::{
+        symbol_short,
         testutils::{Address as _},
         token::{StellarAssetClient, TokenClient},
         Address, Env, BytesN,

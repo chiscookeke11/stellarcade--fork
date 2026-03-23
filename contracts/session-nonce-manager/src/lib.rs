@@ -155,7 +155,7 @@ impl SessionNonceManagerContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::{Address as _, Events as _}, Env};
+    use soroban_sdk::{testutils::{Address as _}, Env};
 
     fn setup() -> (Env, SessionNonceManagerContractClient<'static>, Address) {
         let env = Env::default();
