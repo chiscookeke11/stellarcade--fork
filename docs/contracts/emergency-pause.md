@@ -21,10 +21,10 @@ pub fn init(env: Env, admin: Address) -> Result<(), Error>
 `Result<(), Error>`
 
 ### `pause`
-Pause the contract. Only callable by admin. Errors if already paused.
+Pause the contract with a reason code. Only callable by admin. Errors if already paused.
 
 ```rust
-pub fn pause(env: Env, admin: Address) -> Result<(), Error>
+pub fn pause(env: Env, admin: Address, reason_code: u32) -> Result<(), Error>
 ```
 
 #### Parameters
@@ -33,6 +33,7 @@ pub fn pause(env: Env, admin: Address) -> Result<(), Error>
 |------|------|
 | `env` | `Env` |
 | `admin` | `Address` |
+| `reason_code` | `u32` |
 
 #### Return Type
 
@@ -72,6 +73,23 @@ pub fn is_paused(env: Env) -> bool
 #### Return Type
 
 `bool`
+
+### `get_pause_metadata`
+Get the current or latest pause metadata.
+
+```rust
+pub fn get_pause_metadata(env: Env) -> Option<PauseMetadata>
+```
+
+#### Parameters
+
+| Name | Type |
+|------|------|
+| `env` | `Env` |
+
+#### Return Type
+
+`Option<PauseMetadata>`
 
 ### `require_not_paused`
 Panics if the contract is paused. Call this at the top of any function that should be blocked during an emergency.  Usage from another contract: ```ignore use stellarcade_emergency_pause::require_not_paused; require_not_paused(&env); ```
