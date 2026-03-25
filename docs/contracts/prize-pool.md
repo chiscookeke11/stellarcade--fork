@@ -120,3 +120,20 @@ pub fn get_pool_state(env: Env) -> Result<PoolState, Error>
 
 `Result<PoolState, Error>`
 
+### `get_prize_pool_metrics`
+Returns a detailed snapshot of the pool's metrics, including cumulative payout counts and last sequence markers.
+
+```rust
+pub fn get_prize_pool_metrics(env: Env) -> Result<PrizePoolMetrics, Error>
+```
+
+#### Parameters
+
+| Name | Type |
+|------|------|
+| `env` | `Env` |
+
+#### Return Type
+
+`Result<PrizePoolMetrics, Error>`
+

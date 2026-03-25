@@ -71,6 +71,10 @@ pub enum DataKey {
     TotalReserved,
     /// Per-game reservation keyed by game_id.
     Reservation(u64),
+    /// Cumulative count of all payouts processed.
+    PayoutsCount,
+    /// Sequence number of the last ledger that updated the contract state.
+    LastUpdateLedger,
 }
 
 /// Per-game reservation record.
@@ -92,6 +96,20 @@ pub struct PoolState {
     pub available: i128,
     /// Tokens currently earmarked across all active reservations.
     pub reserved: i128,
+}
+
+/// Comprehensive snapshot of pool metrics for monitoring and analytics.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrizePoolMetrics {
+    /// Currently liquid tokens available for reservation.
+    pub available_balance: i128,
+    /// Sum of all active, unconsumed reservations.
+    pub reserved_amount: i128,
+    /// Lifetime count of successful payout transfers.
+    pub payouts_count: u64,
+    /// Ledger index of the most recent state change.
+    pub last_update_ledger: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +177,8 @@ impl PrizePool {
         // Seed persistent counters so downstream reads never encounter None.
         set_persistent_i128(&env, DataKey::Available, 0);
         set_persistent_i128(&env, DataKey::TotalReserved, 0);
+        set_persistent_u64(&env, DataKey::PayoutsCount, 0);
+        set_persistent_u32(&env, DataKey::LastUpdateLedger, env.ledger().sequence());
 
         Ok(())
     }
@@ -189,6 +209,7 @@ impl PrizePool {
             .ok_or(Error::Overflow)?;
         set_persistent_i128(&env, DataKey::Available, new_available);
 
+        update_markers(&env);
         Funded { from, amount }.publish(&env);
 
         Ok(())
@@ -241,6 +262,7 @@ impl PrizePool {
             .persistent()
             .extend_ttl(&res_key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
 
+        update_markers(&env);
         Reserved { game_id, amount }.publish(&env);
 
         Ok(())
@@ -304,6 +326,7 @@ impl PrizePool {
                 .extend_ttl(&res_key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
         }
 
+        update_markers(&env);
         Released { game_id, amount }.publish(&env);
 
         Ok(())
@@ -368,6 +391,11 @@ impl PrizePool {
                 .extend_ttl(&res_key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
         }
 
+        // Increment cumulative payout counter
+        let count = get_payouts_count(&env);
+        set_persistent_u64(&env, DataKey::PayoutsCount, count + 1);
+        update_markers(&env);
+
         let token = get_token(&env);
         TokenClient::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);
 
@@ -377,7 +405,7 @@ impl PrizePool {
     }
 
     // -----------------------------------------------------------------------
-    // get_pool_state
+    // Query Methods
     // -----------------------------------------------------------------------
 
     /// Returns a point-in-time snapshot of the pool's accounting state.
@@ -386,6 +414,18 @@ impl PrizePool {
         Ok(PoolState {
             available: get_available(&env),
             reserved: get_total_reserved(&env),
+        })
+    }
+
+    /// Returns a detailed snapshot of the pool's metrics, including cumulative
+    /// payout counts and last sequence markers.
+    pub fn get_prize_pool_metrics(env: Env) -> Result<PrizePoolMetrics, Error> {
+        require_initialized(&env)?;
+        Ok(PrizePoolMetrics {
+            available_balance: get_available(&env),
+            reserved_amount: get_total_reserved(&env),
+            payouts_count: get_payouts_count(&env),
+            last_update_ledger: get_last_update_ledger(&env),
         })
     }
 }
@@ -436,8 +476,40 @@ fn get_total_reserved(env: &Env) -> i128 {
         .unwrap_or(0)
 }
 
+fn get_payouts_count(env: &Env) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PayoutsCount)
+        .unwrap_or(0)
+}
+
+fn get_last_update_ledger(env: &Env) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::LastUpdateLedger)
+        .unwrap_or(0)
+}
+
+fn update_markers(env: &Env) {
+    set_persistent_u32(env, DataKey::LastUpdateLedger, env.ledger().sequence());
+}
+
 /// Write an i128 to persistent storage and extend its TTL in one step.
 fn set_persistent_i128(env: &Env, key: DataKey, value: i128) {
+    env.storage().persistent().set(&key, &value);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
+}
+
+fn set_persistent_u64(env: &Env, key: DataKey, value: u64) {
+    env.storage().persistent().set(&key, &value);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
+}
+
+fn set_persistent_u32(env: &Env, key: DataKey, value: u32) {
     env.storage().persistent().set(&key, &value);
     env.storage()
         .persistent()
@@ -449,379 +521,4 @@ fn set_persistent_i128(env: &Env, key: DataKey, value: i128) {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::{
-        testutils::Address as _,
-        token::{StellarAssetClient, TokenClient},
-        Address, Env,
-    };
-
-    // ------------------------------------------------------------------
-    // Test helpers
-    // ------------------------------------------------------------------
-
-    /// Deploy a fresh token contract and return its address plus an admin client
-    /// for minting. The token admin is separate from the prize pool admin so
-    /// tests can mint independently of prize pool auth.
-    fn create_token<'a>(env: &'a Env, token_admin: &Address) -> (Address, StellarAssetClient<'a>) {
-        let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
-        let token_client = StellarAssetClient::new(env, &token_contract.address());
-        (token_contract.address(), token_client)
-    }
-
-    /// Register a PrizePool contract, initialize it, and return the client plus
-    /// supporting addresses. Tokens are pre-minted to `funder` for convenience.
-    fn setup(
-        env: &Env,
-    ) -> (
-        PrizePoolClient<'_>,
-        Address, // admin
-        Address, // funder
-        Address, // token address
-    ) {
-        let admin = Address::generate(env);
-        let funder = Address::generate(env);
-        let token_admin = Address::generate(env);
-
-        let (token_addr, token_sac) = create_token(env, &token_admin);
-
-        let contract_id = env.register(PrizePool, ());
-        let client = PrizePoolClient::new(env, &contract_id);
-
-        env.mock_all_auths();
-        client.init(&admin, &token_addr);
-
-        // Give the funder a starting balance to work with.
-        token_sac.mint(&funder, &10_000i128);
-
-        (client, admin, funder, token_addr)
-    }
-
-    /// Return a `TokenClient` for balance assertions.
-    fn token_client<'a>(env: &'a Env, token: &Address) -> TokenClient<'a> {
-        TokenClient::new(env, token)
-    }
-
-    // ------------------------------------------------------------------
-    // 1. Initialize contract once; reject re-init
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_init_rejects_reinit() {
-        let env = Env::default();
-        let (client, admin, _, token_addr) = setup(&env);
-        env.mock_all_auths();
-
-        let result = client.try_init(&admin, &token_addr);
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------------
-    // 2. Fund pool and verify balance update
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_fund_increases_available() {
-        let env = Env::default();
-        let (client, _, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-
-        let state = client.get_pool_state();
-        assert_eq!(state.available, 1_000);
-        assert_eq!(state.reserved, 0);
-    }
-
-    #[test]
-    fn test_fund_zero_rejected() {
-        let env = Env::default();
-        let (client, _, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        let result = client.try_fund(&funder, &0i128);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_fund_negative_rejected() {
-        let env = Env::default();
-        let (client, _, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        let result = client.try_fund(&funder, &-1i128);
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------------
-    // 3. Reserve path updates state correctly
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_reserve_moves_available_to_reserved() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &600i128);
-
-        let state = client.get_pool_state();
-        assert_eq!(state.available, 400);
-        assert_eq!(state.reserved, 600);
-    }
-
-    #[test]
-    fn test_reserve_same_game_id_rejected() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &42u64, &100i128);
-
-        let result = client.try_reserve(&admin, &42u64, &100i128);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_reserve_exceeding_available_rejected() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &500i128);
-
-        let result = client.try_reserve(&admin, &1u64, &501i128);
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------------
-    // 4. Release path updates state correctly
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_release_returns_funds_to_available() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &600i128);
-        client.release(&admin, &1u64, &600i128);
-
-        let state = client.get_pool_state();
-        assert_eq!(state.available, 1_000);
-        assert_eq!(state.reserved, 0);
-    }
-
-    #[test]
-    fn test_partial_release_leaves_reservation() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &600i128);
-        client.release(&admin, &1u64, &200i128); // return 200, leave 400 reserved
-
-        let state = client.get_pool_state();
-        assert_eq!(state.available, 600);  // 400 original + 200 released
-        assert_eq!(state.reserved, 400);   // 600 - 200
-    }
-
-    #[test]
-    fn test_release_nonexistent_reservation_rejected() {
-        let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
-        env.mock_all_auths();
-
-        let result = client.try_release(&admin, &99u64, &100i128);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_release_exceeding_remaining_rejected() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &500i128);
-
-        let result = client.try_release(&admin, &1u64, &501i128);
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------------
-    // 5. Reject payout above reservation
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_payout_exceeding_reservation_rejected() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &300i128);
-
-        let winner = Address::generate(&env);
-        let result = client.try_payout(&admin, &winner, &1u64, &301i128);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_payout_nonexistent_reservation_rejected() {
-        let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
-        env.mock_all_auths();
-
-        let winner = Address::generate(&env);
-        let result = client.try_payout(&admin, &winner, &99u64, &100i128);
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------------
-    // 6. Happy-path payout transfers tokens and updates state
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_payout_transfers_tokens_to_winner() {
-        let env = Env::default();
-        let (client, admin, funder, token_addr) = setup(&env);
-        env.mock_all_auths();
-
-        let winner = Address::generate(&env);
-        let tc = token_client(&env, &token_addr);
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &500i128);
-        client.payout(&admin, &winner, &1u64, &500i128);
-
-        // Tokens must have moved to the winner.
-        assert_eq!(tc.balance(&winner), 500);
-
-        // Reservation is fully consumed; state reflects the debit.
-        let state = client.get_pool_state();
-        assert_eq!(state.available, 500);
-        assert_eq!(state.reserved, 0);
-    }
-
-    #[test]
-    fn test_multiple_partial_payouts_same_game() {
-        let env = Env::default();
-        let (client, admin, funder, token_addr) = setup(&env);
-        env.mock_all_auths();
-
-        let winner1 = Address::generate(&env);
-        let winner2 = Address::generate(&env);
-        let tc = token_client(&env, &token_addr);
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &7u64, &600i128);
-
-        // Two winners each receive 300 from the same reservation.
-        client.payout(&admin, &winner1, &7u64, &300i128);
-        client.payout(&admin, &winner2, &7u64, &300i128);
-
-        assert_eq!(tc.balance(&winner1), 300);
-        assert_eq!(tc.balance(&winner2), 300);
-
-        let state = client.get_pool_state();
-        assert_eq!(state.available, 400);
-        assert_eq!(state.reserved, 0);
-    }
-
-    // ------------------------------------------------------------------
-    // 7. Unauthorized caller paths fail
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_reserve_by_non_admin_rejected() {
-        let env = Env::default();
-        let (client, _, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        // funder is not admin
-        client.fund(&funder, &1_000i128);
-        let result = client.try_reserve(&funder, &1u64, &100i128);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_payout_by_non_admin_rejected() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &500i128);
-
-        let winner = Address::generate(&env);
-        // funder tries to payout — not admin
-        let result = client.try_payout(&funder, &winner, &1u64, &500i128);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_release_by_non_admin_rejected() {
-        let env = Env::default();
-        let (client, admin, funder, _) = setup(&env);
-        env.mock_all_auths();
-
-        client.fund(&funder, &1_000i128);
-        client.reserve(&admin, &1u64, &500i128);
-
-        let result = client.try_release(&funder, &1u64, &500i128);
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------------
-    // 8. get_pool_state requires initialization
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_get_pool_state_before_init_rejected() {
-        let env = Env::default();
-        let contract_id = env.register(PrizePool, ());
-        let client = PrizePoolClient::new(&env, &contract_id);
-
-        let result = client.try_get_pool_state();
-        assert!(result.is_err());
-    }
-
-    // ------------------------------------------------------------------
-    // 9. Full lifecycle: fund → reserve → partial payout → release remainder
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn test_full_lifecycle() {
-        let env = Env::default();
-        let (client, admin, funder, token_addr) = setup(&env);
-        env.mock_all_auths();
-
-        let winner = Address::generate(&env);
-        let tc = token_client(&env, &token_addr);
-
-        client.fund(&funder, &2_000i128);
-
-        // Two games; game 1 has a winner, game 2 is cancelled.
-        client.reserve(&admin, &1u64, &1_000i128);
-        client.reserve(&admin, &2u64, &1_000i128);
-
-        // Game 1: single winner takes the pot.
-        client.payout(&admin, &winner, &1u64, &1_000i128);
-
-        // Game 2: cancelled, all funds returned.
-        client.release(&admin, &2u64, &1_000i128);
-
-        assert_eq!(tc.balance(&winner), 1_000);
-
-        // Pool should be back to 1_000 available (released game 2 funds).
-        let state = client.get_pool_state();
-        assert_eq!(state.available, 1_000);
-        assert_eq!(state.reserved, 0);
-    }
-}
+mod test;

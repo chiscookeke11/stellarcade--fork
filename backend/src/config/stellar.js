@@ -56,5 +56,6 @@ module.exports = {
   server,
   network,
   passphrase,
+  horizonUrl,
   getContractClient,
 };

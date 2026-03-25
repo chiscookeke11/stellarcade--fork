@@ -8,11 +8,27 @@ jest.mock('../../src/config/database', () => {
     return mock;
 });
 
+jest.mock('../../src/config/redis', () => {
+    const mockClient = {
+        get: jest.fn(),
+        setEx: jest.fn().mockResolvedValue('OK'),
+        connect: jest.fn().mockResolvedValue('OK'),
+        on: jest.fn(),
+        isOpen: true,
+    };
+    return { client: mockClient, connectPromise: Promise.resolve() };
+});
+
 const router = require('../../src/routes/games.routes');
 const GameModel = require('../../src/models/Game.model');
 
 // Mock the model to avoid DB connection issues in tests
 jest.mock('../../src/models/Game.model');
+
+jest.mock('../../src/middleware/auth.middleware', () => (req, res, next) => {
+  req.user = { id: 1 };
+  next();
+});
 
 // Create a standalone app for testing the routes
 const app = express();
@@ -25,6 +41,26 @@ app.use((req, res, next) => {
 });
 
 app.use('/api/games', router);
+
+describe('GET /api/games', () => {
+  test('returns catalog payload without missing-module errors', async () => {
+    const res = await request(app).get('/api/games');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ games: [] });
+  });
+});
+
+describe('POST /api/games/play', () => {
+  test('returns success through game service', async () => {
+    const res = await request(app)
+      .post('/api/games/play')
+      .send({ gameType: 'coin-flip' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+  });
+});
 
 describe('GET /api/games/recent', () => {
     beforeEach(() => {
@@ -39,7 +75,9 @@ describe('GET /api/games/recent', () => {
 
         GameModel.findRecent.mockResolvedValue({
             items: mockGames,
-            total: 2
+            total: 2,
+            page: 1,
+            pageSize: 10,
         });
 
         const res = await request(app).get('/api/games/recent');
@@ -60,7 +98,9 @@ describe('GET /api/games/recent', () => {
     test('should support explicit limit and page pagination', async () => {
         GameModel.findRecent.mockResolvedValue({
             items: [],
-            total: 5
+            total: 5,
+            page: 2,
+            pageSize: 2,
         });
 
         const res = await request(app)
@@ -80,7 +120,12 @@ describe('GET /api/games/recent', () => {
     });
 
     test('should filter by gameType and status', async () => {
-        GameModel.findRecent.mockResolvedValue({ items: [], total: 0 });
+        GameModel.findRecent.mockResolvedValue({
+            items: [],
+            total: 0,
+            page: 1,
+            pageSize: 10,
+        });
 
         const res = await request(app)
             .get('/api/games/recent')
@@ -94,7 +139,12 @@ describe('GET /api/games/recent', () => {
     });
 
     test('should support custom sorting', async () => {
-        GameModel.findRecent.mockResolvedValue({ items: [], total: 0 });
+        GameModel.findRecent.mockResolvedValue({
+            items: [],
+            total: 0,
+            page: 1,
+            pageSize: 10,
+        });
 
         const res = await request(app)
             .get('/api/games/recent')
@@ -108,7 +158,12 @@ describe('GET /api/games/recent', () => {
     });
 
     test('should handle invalid pagination params gracefully by using defaults', async () => {
-        GameModel.findRecent.mockResolvedValue({ items: [], total: 0 });
+        GameModel.findRecent.mockResolvedValue({
+            items: [],
+            total: 0,
+            page: 1,
+            pageSize: 10,
+        });
 
         const res = await request(app)
             .get('/api/games/recent')

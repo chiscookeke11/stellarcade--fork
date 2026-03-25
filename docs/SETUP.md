@@ -59,6 +59,20 @@ Follow these steps to set up Stellarcade for local development.
    cargo test
    ```
 
+## 📡 API Versioning
+
+The Stellarcade API supports versioning to ensure backward compatibility as the platform evolves.
+
+### Versioning Strategy
+- **Namespace**: Routes are prefixed with `/api/v1/` (e.g., `/api/v1/games`).
+- **Header**: You can specify a version using the `X-API-Version` header.
+- **Default**: If no version is specified, the API defaults to `v1`.
+
+### Backward Compatibility
+Existing routes under `/api/` (without the version prefix) are maintained for backward compatibility and currently map to the `v1` implementation.
+
+---
+
 ## 🐳 Running with Docker
 
 The easiest way to get the backend, database, and Redis running is via Docker Compose.

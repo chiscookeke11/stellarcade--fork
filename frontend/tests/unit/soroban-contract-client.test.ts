@@ -7,6 +7,10 @@
 import * as stellarSdkMock from "../__mocks__/stellar-sdk";
 vi.mock("@stellar/stellar-sdk", () => stellarSdkMock);
 
+import {
+  devClearContractSimResults,
+  devRegisterContractSimResult,
+} from "../../src/services/soroban-contract-dev";
 import { SorobanContractClient } from "../../src/services/soroban-contract-client";
 import { ContractAddressRegistry } from "../../src/store/contractAddressRegistry";
 import { SorobanErrorCode } from "../../src/types/errors";
@@ -257,5 +261,26 @@ describe("SorobanContractClient — error mapping", () => {
     const result = await client.pool_fund(VALID_STELLAR_ADDR, 100n);
     expect(result.success).toBe(false);
     expect(!result.success && result.error.code).toBe(SorobanErrorCode.UserRejected);
+  });
+});
+
+describe("SorobanContractClient — dev contract simulation hooks", () => {
+  afterEach(() => {
+    devClearContractSimResults();
+  });
+
+  it("pool_getState returns dev-registered mock when present", async () => {
+    if (import.meta.env.PROD) return;
+    const client = makeClient();
+    devRegisterContractSimResult(VALID_CONTRACT_ADDR, "get_pool_state", {
+      success: true,
+      data: { available: 77n, reserved: 3n },
+    });
+    const result = await client.pool_getState();
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.available).toBe(77n);
+      expect(result.data.reserved).toBe(3n);
+    }
   });
 });
