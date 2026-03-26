@@ -157,6 +157,25 @@ pub fn is_winner(env: Env, puzzle_id: u64, player: Address) -> bool
 
 `bool`
 
+### `get_puzzle_snapshot`
+Return a compact snapshot for restoring a player's puzzle state. Missing puzzles resolve as `PuzzleSnapshotState::Missing`, active puzzles return ordered guess history with the answer hidden, and completed puzzles include the scored guesses plus the revealed answer.
+
+```rust
+pub fn get_puzzle_snapshot(env: Env, player: Address, puzzle_id: u64) -> PuzzleSnapshot
+```
+
+#### Parameters
+
+| Name | Type |
+|------|------|
+| `env` | `Env` |
+| `player` | `Address` |
+| `puzzle_id` | `u64` |
+
+#### Return Type
+
+`PuzzleSnapshot`
+
 ### `score_guess`
 Score a guess against the answer using the standard Wordle algorithm.  1. First pass: mark exact matches (CORRECT). 2. Second pass: for remaining positions, check if the guess letter exists in the remaining answer characters (PRESENT), consuming each answer letter at most once.
 
