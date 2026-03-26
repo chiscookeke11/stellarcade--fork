@@ -9,6 +9,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppError } from '../../types/errors';
 import {
+  isBannerDismissed,
+} from '../../services/global-state-store';
+import {
   ErrorNoticeData,
   ErrorNoticeOptions,
   normalizeErrorForDisplay,
@@ -44,6 +47,12 @@ export interface ErrorNoticeProps {
   testId?: string;
   /** Whether component is visible (for controlled usage) */
   visible?: boolean;
+  /** Persist dismissals across reloads for this notice (default: false). */
+  persistDismissal?: boolean;
+  /** Stable key used to store dismissal state when persisted. */
+  dismissalKey?: string;
+  /** Versioned identity used to reset persisted dismissals for new messages. */
+  dismissalIdentity?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +120,11 @@ export const ErrorNotice: React.FC<ErrorNoticeProps> = ({
   className = '',
   testId = 'error-notice',
   visible = true,
+  persistDismissal = false,
+  dismissalKey = 'error-notice',
+  dismissalIdentity,
 }) => {
-  const [isVisible, setIsVisible] = useState(visible);
+  const [isVisible, setIsVisible] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
 
   // Normalize error data
@@ -129,10 +141,24 @@ export const ErrorNotice: React.FC<ErrorNoticeProps> = ({
     }
   }, [error, options]);
 
+  const resolvedDismissalIdentity =
+    dismissalIdentity ??
+    (errorData
+      ? `${errorData.domain}:${errorData.code}:${errorData.message}`
+      : 'no-error');
+
   // Handle visibility changes
   useEffect(() => {
-    setIsVisible(visible);
-  }, [visible]);
+    if (!visible || !errorData) {
+      setIsVisible(false);
+      return;
+    }
+    if (persistDismissal) {
+      setIsVisible(!isBannerDismissed(dismissalKey, resolvedDismissalIdentity));
+      return;
+    }
+    setIsVisible(true);
+  }, [visible, errorData, persistDismissal, dismissalKey, resolvedDismissalIdentity]);
 
   // Handle dismiss action
   const handleDismiss = useCallback(() => {
