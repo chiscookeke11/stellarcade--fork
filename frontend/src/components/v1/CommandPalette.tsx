@@ -153,4 +153,5 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   );
 };
 
+export { commandStore };
 export default CommandPalette;

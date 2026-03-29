@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import CommandPalette from '@/components/v1/CommandPalette';
+import CommandPalette, { commandStore } from '@/components/v1/CommandPalette';
 
 const commands = [
   {
@@ -20,6 +20,7 @@ const commands = [
 describe('CommandPalette', () => {
   beforeEach(() => {
     localStorage.clear();
+    commandStore.dispatch({ type: 'COMMAND_PALETTE_CLOSE' });
   });
 
   it('opens with keyboard shortcut and closes with escape', async () => {
