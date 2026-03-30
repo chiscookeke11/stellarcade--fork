@@ -161,7 +161,7 @@ describe('TxStatusPanel', () => {
 
         it('does not crash when window.print is undefined', () => {
             const originalPrint = window.print;
-            // @ts-ignore - intentionally setting to undefined for testing
+            // @ts-expect-error - intentionally setting to undefined for testing
             window.print = undefined;
 
             const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
