@@ -52,12 +52,22 @@ body {
 
 .app-container {
   min-height: 100vh;
+}
+
+.app-main-layout {
+  min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
+@media (min-width: 1024px) {
+  .app-main-layout {
+    margin-left: 280px;
+  }
+}
+
 .app-header {
-  padding: 1.5rem 2rem;
+  padding: 1.5rem 2rem 1.5rem 4.5rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -66,6 +76,12 @@ body {
   position: sticky;
   top: 0;
   z-index: 100;
+}
+
+@media (min-width: 1024px) {
+  .app-header {
+    padding-left: 2rem;
+  }
 }
 
 .logo {
